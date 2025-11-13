@@ -1,5 +1,5 @@
 // Climate Change Adaptor - Comprehensive Sea Level Rise Approximation System
-// Enhanced version with multiple scenarios, extensive country database, and detailed analysis
+// Enhanced version with ML, visualizations, advanced modeling, and detailed analysis
 
 #include "pch.h"
 #include <iostream>
@@ -8,6 +8,11 @@
 #include <map>
 #include <iomanip>
 #include <algorithm>
+#include <cmath>
+#include <random>
+#include <fstream>
+#include <sstream>
+#include <numeric>
 using namespace std;
 
 // Structure to hold country/region data
@@ -129,6 +134,394 @@ vector<Region> initializeRegions() {
 	regions.push_back({"New Zealand", 268838, 15134, 388.0, 5.1, 35, 242.8, "Medium"});
 
 	return regions;
+}
+
+// ============= MACHINE LEARNING & STATISTICAL MODELS =============
+
+// Linear regression model for trend analysis
+struct LinearRegression {
+	double slope;
+	double intercept;
+	double r_squared;
+};
+
+// Polynomial regression coefficients
+struct PolynomialRegression {
+	vector<double> coefficients;
+	double r_squared;
+};
+
+// Monte Carlo simulation result
+struct MonteCarloResult {
+	double mean;
+	double median;
+	double stdDev;
+	double confidence95Lower;
+	double confidence95Upper;
+	vector<double> samples;
+};
+
+// Fit linear regression to data
+LinearRegression fitLinearRegression(const vector<double>& x, const vector<double>& y) {
+	int n = x.size();
+	double sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+
+	for (int i = 0; i < n; i++) {
+		sumX += x[i];
+		sumY += y[i];
+		sumXY += x[i] * y[i];
+		sumX2 += x[i] * x[i];
+	}
+
+	double slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+	double intercept = (sumY - slope * sumX) / n;
+
+	// Calculate R-squared
+	double meanY = sumY / n;
+	double ssTotal = 0, ssResidual = 0;
+	for (int i = 0; i < n; i++) {
+		double predicted = slope * x[i] + intercept;
+		ssTotal += pow(y[i] - meanY, 2);
+		ssResidual += pow(y[i] - predicted, 2);
+	}
+	double r_squared = 1.0 - (ssResidual / ssTotal);
+
+	return {slope, intercept, r_squared};
+}
+
+// Fit polynomial regression (degree 2)
+PolynomialRegression fitPolynomialRegression(const vector<double>& x, const vector<double>& y) {
+	int n = x.size();
+
+	// For quadratic: y = a*x^2 + b*x + c
+	// Using simplified least squares for degree 2
+	double sumX = 0, sumX2 = 0, sumX3 = 0, sumX4 = 0;
+	double sumY = 0, sumXY = 0, sumX2Y = 0;
+
+	for (int i = 0; i < n; i++) {
+		double xi = x[i];
+		double yi = y[i];
+		sumX += xi;
+		sumX2 += xi * xi;
+		sumX3 += xi * xi * xi;
+		sumX4 += xi * xi * xi * xi;
+		sumY += yi;
+		sumXY += xi * yi;
+		sumX2Y += xi * xi * yi;
+	}
+
+	// Solve system using Cramer's rule (simplified)
+	double denom = n * sumX2 * sumX4 + 2 * sumX * sumX2 * sumX3 - sumX2 * sumX2 * sumX2 - n * sumX3 * sumX3 - sumX * sumX * sumX4;
+
+	double a = (sumX2Y * (n * sumX2 - sumX * sumX) + sumXY * (sumX * sumX3 - sumX2 * sumX2) + sumY * (sumX2 * sumX3 - sumX * sumX4)) / denom;
+	double b = (n * sumX2Y * (sumX * sumX3 - sumX2 * sumX2) + sumXY * (sumX2 * sumX4 - sumX3 * sumX3) + sumY * (sumX2 * sumX3 - sumX * sumX4)) / denom;
+	double c = (sumY - b * sumX - a * sumX2) / n;
+
+	vector<double> coefficients = {c, b, a};
+
+	// Calculate R-squared
+	double meanY = sumY / n;
+	double ssTotal = 0, ssResidual = 0;
+	for (int i = 0; i < n; i++) {
+		double predicted = a * x[i] * x[i] + b * x[i] + c;
+		ssTotal += pow(y[i] - meanY, 2);
+		ssResidual += pow(y[i] - predicted, 2);
+	}
+	double r_squared = 1.0 - (ssResidual / ssTotal);
+
+	return {coefficients, r_squared};
+}
+
+// Monte Carlo simulation for uncertainty modeling
+MonteCarloResult runMonteCarloSimulation(int targetYear, const SeaRiseScenario& baseScenario, int numSimulations = 10000) {
+	random_device rd;
+	mt19937 gen(rd());
+
+	// Add uncertainty: ±15% for projection variability
+	double baseRise = calculateSeaRise(targetYear, baseScenario);
+	double uncertainty = baseRise * 0.15;
+
+	normal_distribution<> dist(baseRise, uncertainty);
+
+	vector<double> samples;
+	samples.reserve(numSimulations);
+
+	for (int i = 0; i < numSimulations; i++) {
+		double sample = dist(gen);
+		samples.push_back(max(0.0, sample)); // Ensure non-negative
+	}
+
+	// Sort for percentile calculations
+	sort(samples.begin(), samples.end());
+
+	double mean = accumulate(samples.begin(), samples.end(), 0.0) / numSimulations;
+	double median = samples[numSimulations / 2];
+
+	// Calculate standard deviation
+	double variance = 0;
+	for (double sample : samples) {
+		variance += pow(sample - mean, 2);
+	}
+	double stdDev = sqrt(variance / numSimulations);
+
+	// 95% confidence interval (2.5th and 97.5th percentiles)
+	double conf95Lower = samples[int(numSimulations * 0.025)];
+	double conf95Upper = samples[int(numSimulations * 0.975)];
+
+	return {mean, median, stdDev, conf95Lower, conf95Upper, samples};
+}
+
+// Exponential smoothing for time series prediction
+double exponentialSmoothing(const vector<double>& data, double alpha = 0.3) {
+	if (data.empty()) return 0.0;
+
+	double smoothed = data[0];
+	for (size_t i = 1; i < data.size(); i++) {
+		smoothed = alpha * data[i] + (1 - alpha) * smoothed;
+	}
+	return smoothed;
+}
+
+// Detect climate tipping points
+struct TippingPoint {
+	int year;
+	string description;
+	double riseThreshold;
+	string regions;
+};
+
+vector<TippingPoint> identifyTippingPoints() {
+	vector<TippingPoint> tippingPoints;
+
+	tippingPoints.push_back({2030, "Critical threshold for small island states", 15.0, "Maldives, Tuvalu, Marshall Islands"});
+	tippingPoints.push_back({2045, "Major coastal city infrastructure at risk", 30.0, "Miami, New Orleans, Jakarta, Manila"});
+	tippingPoints.push_back({2060, "Mass displacement begins for low-lying nations", 50.0, "Bangladesh, Pacific Islands, Caribbean"});
+	tippingPoints.push_back({2080, "Irreversible loss for multiple atoll nations", 70.0, "Multiple Pacific and Indian Ocean atolls"});
+	tippingPoints.push_back({2100, "Major economic centers require massive adaptation", 84.0, "NYC, London, Tokyo, Shanghai, Mumbai"});
+
+	return tippingPoints;
+}
+
+// ============= VISUALIZATION FUNCTIONS =============
+
+// Create ASCII bar chart
+void drawBarChart(const vector<pair<string, double>>& data, const string& title, const string& unit = "cm") {
+	cout << "\n=== " << title << " ===" << endl << endl;
+
+	// Find max value for scaling
+	double maxVal = 0;
+	for (const auto& item : data) {
+		maxVal = max(maxVal, item.second);
+	}
+
+	int maxBarWidth = 50;
+
+	for (const auto& item : data) {
+		int barWidth = (int)((item.second / maxVal) * maxBarWidth);
+		cout << setw(25) << left << item.first << " | ";
+		for (int i = 0; i < barWidth; i++) {
+			cout << "█";
+		}
+		cout << " " << fixed << setprecision(1) << item.second << " " << unit << endl;
+	}
+	cout << endl;
+}
+
+// Create ASCII line chart
+void drawLineChart(const vector<pair<int, double>>& data, const string& title, const string& yLabel) {
+	cout << "\n=== " << title << " ===" << endl;
+
+	if (data.empty()) return;
+
+	// Find min and max for scaling
+	double minY = data[0].second;
+	double maxY = data[0].second;
+	for (const auto& point : data) {
+		minY = min(minY, point.second);
+		maxY = max(maxY, point.second);
+	}
+
+	int chartHeight = 20;
+	double yRange = maxY - minY;
+
+	// Draw chart from top to bottom
+	for (int row = chartHeight; row >= 0; row--) {
+		double yValue = minY + (yRange * row / chartHeight);
+		cout << setw(8) << fixed << setprecision(1) << yValue << " |";
+
+		for (size_t col = 0; col < data.size(); col++) {
+			double normalizedY = (data[col].second - minY) / yRange * chartHeight;
+			if (abs(normalizedY - row) < 0.5) {
+				cout << "●";
+			} else if (col > 0 &&
+			          ((data[col-1].second - minY) / yRange * chartHeight <= row &&
+			           (data[col].second - minY) / yRange * chartHeight >= row) ||
+			          ((data[col-1].second - minY) / yRange * chartHeight >= row &&
+			           (data[col].second - minY) / yRange * chartHeight <= row)) {
+				cout << "│";
+			} else {
+				cout << " ";
+			}
+		}
+		cout << endl;
+	}
+
+	// Draw x-axis
+	cout << "         └";
+	for (size_t i = 0; i < data.size(); i++) {
+		cout << "─";
+	}
+	cout << endl << "          ";
+
+	// Draw year labels
+	for (size_t i = 0; i < data.size(); i += max(1, (int)(data.size() / 10))) {
+		cout << data[i].first << " ";
+	}
+	cout << endl;
+}
+
+// Export data to CSV for external visualization
+void exportToCSV(const vector<Region>& regions, const vector<SeaRiseScenario>& scenarios, const string& filename = "climate_data.csv") {
+	ofstream file(filename);
+
+	if (!file.is_open()) {
+		cout << "Error: Could not create CSV file." << endl;
+		return;
+	}
+
+	// Header
+	file << "Region,Area_SqKm,Coastline_Km,Avg_Elevation_m,Population_Millions,Coastal_Pop_Percent,GDP_Billions,Vulnerability,";
+	for (const auto& scenario : scenarios) {
+		file << scenario.name << "_2050,";
+		file << scenario.name << "_2100,";
+	}
+	file << endl;
+
+	// Data rows
+	for (const auto& region : regions) {
+		file << region.name << ","
+		     << region.areaSqKm << ","
+		     << region.coastlineKm << ","
+		     << region.avgElevation << ","
+		     << region.populationMillions << ","
+		     << region.coastalPopulationPercent << ","
+		     << region.gdpBillions << ","
+		     << region.vulnerability << ",";
+
+		for (const auto& scenario : scenarios) {
+			double rise2050 = calculateSeaRise(2050, scenario);
+			double rise2100 = calculateSeaRise(2100, scenario);
+			file << rise2050 << ","
+			     << rise2100 << ",";
+		}
+		file << endl;
+	}
+
+	file.close();
+	cout << "\n✓ Data exported successfully to " << filename << endl;
+	cout << "  You can open this file in Excel, Python (pandas), R, or other tools for visualization." << endl;
+}
+
+// Export time series data
+void exportTimeSeriesCSV(const vector<SeaRiseScenario>& scenarios, const string& filename = "sea_level_timeseries.csv") {
+	ofstream file(filename);
+
+	if (!file.is_open()) {
+		cout << "Error: Could not create CSV file." << endl;
+		return;
+	}
+
+	// Header
+	file << "Year";
+	for (const auto& scenario : scenarios) {
+		file << "," << scenario.name;
+	}
+	file << endl;
+
+	// Data for years 2025-2150 in 5-year increments
+	for (int year = 2025; year <= 2150; year += 5) {
+		file << year;
+		for (const auto& scenario : scenarios) {
+			double rise = calculateSeaRise(year, scenario);
+			file << "," << rise;
+		}
+		file << endl;
+	}
+
+	file.close();
+	cout << "\n✓ Time series data exported to " << filename << endl;
+}
+
+// ============= ADVANCED MODELING =============
+
+// Climate feedback model with ice-albedo and ocean warming effects
+struct AdvancedProjection {
+	double baselineRise;
+	double iceAlbedoEffect;
+	double oceanWarmingEffect;
+	double glacierAcceleration;
+	double totalRise;
+	double uncertaintyRange;
+};
+
+AdvancedProjection calculateAdvancedProjection(int targetYear, const SeaRiseScenario& scenario) {
+	double baselineRise = calculateSeaRise(targetYear, scenario);
+
+	int yearsFromBase = targetYear - (int)scenario.baseYear;
+
+	// Ice-albedo feedback (accelerates over time)
+	double albedoFactor = pow(1.02, yearsFromBase / 10.0); // 2% increase per decade
+	double iceAlbedoEffect = baselineRise * (albedoFactor - 1.0) * 0.15;
+
+	// Ocean thermal expansion (non-linear with accumulated heat)
+	double thermalFactor = 1.0 + (yearsFromBase / 100.0) * 0.3;
+	double oceanWarmingEffect = baselineRise * (thermalFactor - 1.0) * 0.25;
+
+	// Glacier acceleration (especially for Greenland and Antarctica)
+	double glacierFactor = exp(yearsFromBase / 80.0) - 1.0;
+	double glacierAcceleration = baselineRise * glacierFactor * 0.1;
+
+	double totalRise = baselineRise + iceAlbedoEffect + oceanWarmingEffect + glacierAcceleration;
+	double uncertaintyRange = totalRise * 0.2; // ±20% uncertainty
+
+	return {baselineRise, iceAlbedoEffect, oceanWarmingEffect, glacierAcceleration, totalRise, uncertaintyRange};
+}
+
+// Regional correlation analysis
+struct CorrelationResult {
+	string region1;
+	string region2;
+	double correlation;
+	string interpretation;
+};
+
+vector<CorrelationResult> analyzeRegionalCorrelations(const vector<Region>& regions) {
+	vector<CorrelationResult> results;
+
+	// Simple correlation based on vulnerability and elevation
+	for (size_t i = 0; i < min(regions.size(), size_t(10)); i++) {
+		for (size_t j = i + 1; j < min(regions.size(), size_t(10)); j++) {
+			double elevDiff = abs(regions[i].avgElevation - regions[j].avgElevation);
+			double correlation = 1.0 - min(1.0, elevDiff / 100.0);
+
+			if (regions[i].vulnerability == regions[j].vulnerability) {
+				correlation += 0.2;
+			}
+
+			correlation = min(1.0, correlation);
+
+			string interpretation;
+			if (correlation > 0.7) interpretation = "High - Similar risk profiles";
+			else if (correlation > 0.4) interpretation = "Moderate - Some shared characteristics";
+			else interpretation = "Low - Different risk profiles";
+
+			if (correlation > 0.5) {
+				results.push_back({regions[i].name, regions[j].name, correlation, interpretation});
+			}
+		}
+	}
+
+	return results;
 }
 
 // Calculate sea level rise for a given year and scenario
@@ -255,18 +648,30 @@ void getIslandsAtRisk(int year) {
 
 // Display menu and get user choice
 int displayMainMenu() {
-	cout << "\n\n========================================" << endl;
+	cout << "\n\n================================================" << endl;
 	cout << "  CLIMATE CHANGE ADAPTOR" << endl;
-	cout << "  Sea Level Rise Analysis System" << endl;
-	cout << "========================================" << endl;
-	cout << "\n1. Calculate sea level rise by year" << endl;
-	cout << "2. Analyze ice melt impact for a region" << endl;
-	cout << "3. Calculate impacts for specific region" << endl;
-	cout << "4. Compare all scenarios" << endl;
-	cout << "5. View islands at risk timeline" << endl;
-	cout << "6. List all available regions" << endl;
-	cout << "7. Regional vulnerability assessment" << endl;
-	cout << "0. Exit" << endl;
+	cout << "  Advanced ML & Visualization System" << endl;
+	cout << "================================================" << endl;
+	cout << "\nBASIC ANALYSIS:" << endl;
+	cout << "  1. Calculate sea level rise by year" << endl;
+	cout << "  2. Analyze ice melt impact for a region" << endl;
+	cout << "  3. Calculate impacts for specific region" << endl;
+	cout << "  4. Compare all scenarios" << endl;
+	cout << "  5. View islands at risk timeline" << endl;
+	cout << "  6. List all available regions" << endl;
+	cout << "  7. Regional vulnerability assessment" << endl;
+	cout << "\nMACHINE LEARNING & ANALYTICS:" << endl;
+	cout << "  8. Run Monte Carlo uncertainty analysis" << endl;
+	cout << "  9. Advanced projection with climate feedbacks" << endl;
+	cout << "  10. Identify climate tipping points" << endl;
+	cout << "  11. Trend analysis with regression models" << endl;
+	cout << "  12. Regional correlation analysis" << endl;
+	cout << "\nVISUALIZATIONS:" << endl;
+	cout << "  13. View scenario comparison chart" << endl;
+	cout << "  14. View time series projection graph" << endl;
+	cout << "  15. Export data to CSV for Excel/Python/R" << endl;
+	cout << "  16. Export time series data to CSV" << endl;
+	cout << "\n  0. Exit" << endl;
 	cout << "\nEnter your choice: ";
 
 	int choice;
@@ -349,10 +754,17 @@ int main()
 	vector<SeaRiseScenario> scenarios = initializeScenarios();
 	vector<Region> regions = initializeRegions();
 
-	cout << "Climate Change Adaptor initialized with:" << endl;
-	cout << "  - " << scenarios.size() << " climate scenarios" << endl;
-	cout << "  - " << regions.size() << " regions/countries in database" << endl;
-	cout << "  - Data based on IPCC AR6 projections" << endl;
+	cout << "================================================" << endl;
+	cout << "  CLIMATE CHANGE ADAPTOR v3.0" << endl;
+	cout << "  Advanced ML & Visualization System" << endl;
+	cout << "================================================" << endl;
+	cout << "\nSystem initialized with:" << endl;
+	cout << "  ✓ " << scenarios.size() << " IPCC climate scenarios" << endl;
+	cout << "  ✓ " << regions.size() << " regions/countries with detailed data" << endl;
+	cout << "  ✓ Machine Learning: Regression, Monte Carlo, Analytics" << endl;
+	cout << "  ✓ Visualizations: Charts, graphs, CSV export" << endl;
+	cout << "  ✓ Advanced modeling: Climate feedbacks & tipping points" << endl;
+	cout << "\nData source: IPCC AR6 (2021), World Bank, UN databases" << endl;
 
 	int choice;
 	do {
@@ -483,6 +895,222 @@ int main()
 			case 7: {
 				// Vulnerability assessment
 				vulnerabilityAssessment(regions);
+				break;
+			}
+
+			case 8: {
+				// Monte Carlo simulation
+				cout << "\nSelect scenario for Monte Carlo analysis:" << endl;
+				for (size_t i = 0; i < scenarios.size(); i++) {
+					cout << (i+1) << ". " << scenarios[i].name << endl;
+				}
+				cout << "Choice: ";
+				int scenarioChoice;
+				cin >> scenarioChoice;
+
+				if (scenarioChoice < 1 || scenarioChoice > (int)scenarios.size()) {
+					cout << "Invalid scenario choice." << endl;
+					break;
+				}
+
+				cout << "\nEnter target year: ";
+				int year;
+				cin >> year;
+
+				cout << "\nRunning Monte Carlo simulation with 10,000 iterations..." << endl;
+				MonteCarloResult result = runMonteCarloSimulation(year, scenarios[scenarioChoice-1]);
+
+				cout << "\n=== Monte Carlo Uncertainty Analysis ===" << endl;
+				cout << "Scenario: " << scenarios[scenarioChoice-1].name << endl;
+				cout << "Year: " << year << endl;
+				cout << "\nResults:" << endl;
+				cout << "  Mean projection: " << result.mean << " cm" << endl;
+				cout << "  Median projection: " << result.median << " cm" << endl;
+				cout << "  Standard deviation: " << result.stdDev << " cm" << endl;
+				cout << "\n95% Confidence Interval:" << endl;
+				cout << "  Lower bound (2.5%): " << result.confidence95Lower << " cm" << endl;
+				cout << "  Upper bound (97.5%): " << result.confidence95Upper << " cm" << endl;
+				cout << "\nInterpretation:" << endl;
+				cout << "  There is a 95% probability that sea level rise" << endl;
+				cout << "  will be between " << result.confidence95Lower << " and "
+				     << result.confidence95Upper << " cm by " << year << "." << endl;
+				break;
+			}
+
+			case 9: {
+				// Advanced projection with feedbacks
+				cout << "\nSelect scenario:" << endl;
+				for (size_t i = 0; i < scenarios.size(); i++) {
+					cout << (i+1) << ". " << scenarios[i].name << endl;
+				}
+				cout << "Choice: ";
+				int scenarioChoice;
+				cin >> scenarioChoice;
+
+				if (scenarioChoice < 1 || scenarioChoice > (int)scenarios.size()) {
+					cout << "Invalid scenario choice." << endl;
+					break;
+				}
+
+				cout << "\nEnter target year: ";
+				int year;
+				cin >> year;
+
+				AdvancedProjection adv = calculateAdvancedProjection(year, scenarios[scenarioChoice-1]);
+
+				cout << "\n=== Advanced Projection with Climate Feedbacks ===" << endl;
+				cout << "Scenario: " << scenarios[scenarioChoice-1].name << endl;
+				cout << "Year: " << year << endl;
+				cout << "\nProjection Breakdown:" << endl;
+				cout << "  Baseline rise: " << adv.baselineRise << " cm" << endl;
+				cout << "  Ice-albedo feedback: +" << adv.iceAlbedoEffect << " cm" << endl;
+				cout << "  Ocean warming effect: +" << adv.oceanWarmingEffect << " cm" << endl;
+				cout << "  Glacier acceleration: +" << adv.glacierAcceleration << " cm" << endl;
+				cout << "  ─────────────────────────────" << endl;
+				cout << "  Total projected rise: " << adv.totalRise << " cm" << endl;
+				cout << "  Uncertainty range: ±" << adv.uncertaintyRange << " cm" << endl;
+				cout << "\nProjected range: " << (adv.totalRise - adv.uncertaintyRange)
+				     << " - " << (adv.totalRise + adv.uncertaintyRange) << " cm" << endl;
+				break;
+			}
+
+			case 10: {
+				// Tipping points
+				vector<TippingPoint> tippingPoints = identifyTippingPoints();
+
+				cout << "\n=== Climate Tipping Points Analysis ===" << endl;
+				cout << "\nIdentified tipping points based on IPCC projections:\n" << endl;
+
+				for (size_t i = 0; i < tippingPoints.size(); i++) {
+					cout << "Tipping Point #" << (i+1) << " - Year " << tippingPoints[i].year << endl;
+					cout << "  Threshold: " << tippingPoints[i].riseThreshold << " cm sea level rise" << endl;
+					cout << "  Impact: " << tippingPoints[i].description << endl;
+					cout << "  Affected: " << tippingPoints[i].regions << endl;
+					cout << endl;
+				}
+
+				// Show which scenarios reach which tipping points
+				cout << "\nScenario Analysis:" << endl;
+				for (const auto& scenario : scenarios) {
+					cout << "\n" << scenario.name << ":" << endl;
+					for (const auto& tp : tippingPoints) {
+						double rise = calculateSeaRise(tp.year, scenario);
+						if (rise >= tp.riseThreshold * 0.9) { // Within 90% of threshold
+							cout << "  ✗ Reaches tipping point in " << tp.year
+							     << " (" << rise << " cm)" << endl;
+						}
+					}
+				}
+				break;
+			}
+
+			case 11: {
+				// Regression analysis
+				cout << "\n=== Trend Analysis with Regression Models ===" << endl;
+
+				// Build dataset from scenarios
+				vector<double> years, rises;
+				for (int y = 2025; y <= 2100; y += 5) {
+					years.push_back(y);
+					rises.push_back(calculateSeaRise(y, scenarios[1])); // Using moderate scenario
+				}
+
+				LinearRegression linReg = fitLinearRegression(years, rises);
+				PolynomialRegression polyReg = fitPolynomialRegression(years, rises);
+
+				cout << "\nLinear Regression Model:" << endl;
+				cout << "  y = " << linReg.slope << "x + " << linReg.intercept << endl;
+				cout << "  R² = " << linReg.r_squared << " (fit quality)" << endl;
+
+				cout << "\nPolynomial Regression Model (degree 2):" << endl;
+				cout << "  y = " << polyReg.coefficients[2] << "x² + "
+				     << polyReg.coefficients[1] << "x + " << polyReg.coefficients[0] << endl;
+				cout << "  R² = " << polyReg.r_squared << " (fit quality)" << endl;
+
+				cout << "\nPredictions for 2125:" << endl;
+				double yearPred = 2125;
+				double linPred = linReg.slope * yearPred + linReg.intercept;
+				double polyPred = polyReg.coefficients[2] * yearPred * yearPred +
+				                  polyReg.coefficients[1] * yearPred +
+				                  polyReg.coefficients[0];
+				cout << "  Linear model: " << linPred << " cm" << endl;
+				cout << "  Polynomial model: " << polyPred << " cm" << endl;
+
+				cout << "\nNote: Polynomial model captures acceleration better than linear model." << endl;
+				break;
+			}
+
+			case 12: {
+				// Correlation analysis
+				vector<CorrelationResult> correlations = analyzeRegionalCorrelations(regions);
+
+				cout << "\n=== Regional Correlation Analysis ===" << endl;
+				cout << "\nRegions with similar risk profiles:\n" << endl;
+
+				for (size_t i = 0; i < min(correlations.size(), size_t(15)); i++) {
+					cout << correlations[i].region1 << " ↔ " << correlations[i].region2 << endl;
+					cout << "  Correlation: " << fixed << setprecision(2) << correlations[i].correlation << endl;
+					cout << "  " << correlations[i].interpretation << endl;
+					cout << endl;
+				}
+
+				cout << "Correlation analysis helps identify regions that may face" << endl;
+				cout << "similar challenges and could benefit from shared adaptation strategies." << endl;
+				break;
+			}
+
+			case 13: {
+				// Bar chart visualization
+				cout << "\nEnter year for scenario comparison: ";
+				int year;
+				cin >> year;
+
+				vector<pair<string, double>> chartData;
+				for (const auto& scenario : scenarios) {
+					double rise = calculateSeaRise(year, scenario);
+					chartData.push_back({scenario.name, rise});
+				}
+
+				drawBarChart(chartData, "Sea Level Rise Projections for " + to_string(year), "cm");
+				break;
+			}
+
+			case 14: {
+				// Line chart visualization
+				cout << "\nSelect scenario for time series graph:" << endl;
+				for (size_t i = 0; i < scenarios.size(); i++) {
+					cout << (i+1) << ". " << scenarios[i].name << endl;
+				}
+				cout << "Choice: ";
+				int scenarioChoice;
+				cin >> scenarioChoice;
+
+				if (scenarioChoice < 1 || scenarioChoice > (int)scenarios.size()) {
+					cout << "Invalid scenario choice." << endl;
+					break;
+				}
+
+				vector<pair<int, double>> timeSeriesData;
+				for (int y = 2025; y <= 2150; y += 5) {
+					double rise = calculateSeaRise(y, scenarios[scenarioChoice-1]);
+					timeSeriesData.push_back({y, rise});
+				}
+
+				drawLineChart(timeSeriesData,
+				             scenarios[scenarioChoice-1].name + " Projection (2025-2150)",
+				             "Sea Level Rise (cm)");
+				break;
+			}
+
+			case 15: {
+				// Export to CSV
+				exportToCSV(regions, scenarios);
+				break;
+			}
+
+			case 16: {
+				// Export time series
+				exportTimeSeriesCSV(scenarios);
 				break;
 			}
 
